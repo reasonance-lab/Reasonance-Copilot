@@ -1,0 +1,25 @@
+{
+	"compilerOptions": {
+		"module": "Node16",
+		"target": "ES2022",
+		"outDir": "out",
+		"lib": [
+			"ES2022",
+			"DOM"    // Added for VS Code API compatibility
+		],
+		"sourceMap": true,
+		"rootDir": "src",
+		"strict": true,
+		"esModuleInterop": true,    // Added for better module compatibility
+		"skipLibCheck": true,       // Added to skip type checking of node_modules
+		"resolveJsonModule": true,  // Added for importing JSON files
+		"moduleResolution": "Node16"  // Added to ensure proper module resolution
+	},
+	"exclude": [
+		"node_modules",
+		".vscode-test"
+	],
+	"include": [
+		"src"
+	]
+}

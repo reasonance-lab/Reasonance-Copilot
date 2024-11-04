@@ -1,0 +1,70 @@
+{
+  "name": "reasonance-copilot",
+  "displayName": "Reasonance Copilot",
+  "description": "AI-powered code completion and generation using Claude API",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "1.95.1"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "Snippets"
+  ],
+  "activationEvents": [
+    "onCommand",
+    "onLanguage:python",
+    "onLanguage:javascript",
+    "onLanguage:typescript"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "reasonance-copilot.apiKey",
+        "title": "Reasonance Copilot: Set Claude API Key"
+      },
+      {
+        "command": "reasonance-copilot.generateFunction",
+        "title": "Reasonance Copilot: Generate Function"
+      },
+      {
+        "command": "reasonance-copilot.explainCode",
+        "title": "Reasonance Copilot: Explain Code"
+      }
+    ],
+    "configuration": {
+      "title": "Reasonance Copilot",
+      "properties": {
+        "reasonance-copilot.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API Key for Claude (Anthropic)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.31.0"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.8",
+    "@types/node": "20.x",
+    "@types/vscode": "1.95.1",
+    "@typescript-eslint/eslint-plugin": "^8.7.0",
+    "@typescript-eslint/parser": "^8.7.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1",
+    "eslint": "^9.11.1",
+    "typescript": "^5.6.2",
+    "vscode": "1.95.1"
+  }
+}
