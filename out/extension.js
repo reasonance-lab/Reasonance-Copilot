@@ -27,27 +27,35 @@ exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const sdk_1 = require("@anthropic-ai/sdk");
-const LLM_CONFIG = {
-    MODEL: "claude-3-5-sonnet-20241022",
-    MAX_TOKENS: 8192,
-    COMPLETION_TOKENS: 8192,
-    FUNCTION_TOKENS: 8192,
-    DEFAULT_TEMPERATURE: 0.3,
-    TRIGGER_SEQUENCE: "...;",
-    CONTEXT_LINES: 10
-};
+let anthropicClient;
+/**
+ * Retrieves the LLM configuration from the extension settings.
+ */
+function getLLMConfig() {
+    const config = vscode.workspace.getConfiguration('reasonance-copilot');
+    return {
+        MODEL: config.get('model', 'claude-2'),
+        MAX_TOKENS: config.get('maxTokens', 8192),
+        COMPLETION_TOKENS: config.get('completionTokens', 8192),
+        FUNCTION_TOKENS: config.get('functionTokens', 8192),
+        DEFAULT_TEMPERATURE: config.get('defaultTemperature', 0.3),
+        TRIGGER_SEQUENCE: config.get('triggerSequence', '...;'),
+        CONTEXT_LINES: config.get('contextLines', 10),
+        THEME: config.get('theme', 'github.min.css')
+    };
+}
 const SYSTEM_PROMPTS = {
     COMPLETION: `
-        You are an expert code completion assistant. Analyze the existing code context, especially variable names, function signatures, and coding patterns. 
+        You are an expert code completion assistant just like IntelliSense in Visual Studio Code. Analyze the existing code context, especially variable names, function signatures, and coding patterns. 
         Then provide contextually relevant, multi-line completions that precisely match the established style. Focus on completing the current logical block or function. 
-        Return only the code completion without any explanations or markdown formatting.`,
+        Return only the code completion, as described above, without any explanations or markdown formatting. Your response will be directly streamed to the editor of the VS Code.`,
     FUNCTION: `
-        You are a code generation assistant. Generate clean, efficient, reusable code based on descriptions. 
-        Return pure code without \`\`\` or \`\`\`python. All non-code explanations should be formatted and presented as commented lines. 
-        Start your response with five asterisks as a single comment line before and end your response with the same line. `,
+        You are a top-notch programming code generation assistant. Your requests are sent from an extension of the VS Code and your response will be directly streamed to the editor of the VS Code.
+        Generate clean, efficient, reusable code based on provided user instruction. 
+        Return pure code without \`\`\` or \`\`\`python. All non-code explanations should be formatted and presented as commented lines.`,
     EXPLANATION: `
-        You are a code generation and explanation assistant. Read the questions (if available) in the provided info and update the code accordingly.
-        Code Display Requirements:
+        You are a code explanation and generation assistant. Read the questions (if available) in the user-provided prompt and act accordingly.
+        Code Display and Dormatting Requirements in Your Output:
         1. Never output raw HTML, JavaScript, or any executable code directly
         2. Always wrap code examples in appropriate code blocks:
            - Use \`\`\`language-name for each code block
@@ -57,7 +65,7 @@ const SYSTEM_PROMPTS = {
         1. For HTML content:
            - Use &lt; and &gt; for angle brackets
            - Escape quotes and braces
-           - Use <pre> tags with escaped content
+           - Use &lt;pre&gt; tags with escaped content
         2. For JavaScript content:
            - Escape any script tags
            - Show as plaintext in code blocks
@@ -67,10 +75,12 @@ const SYSTEM_PROMPTS = {
            - Show only the code structure
            - Prevent automatic loading/execution
            - Escape all URLs and data URIs
-        The goal is to ensure all code is displayed as text only, with no possibility of execution in the webviewer while maintaining readability and proper documentation.
-        All explanations should be formatted as comments. Provide more efficient and elegant solutions if available.`
+        The goal is to ensure all code is displayed with no possibility of execution in the webviewer of the VS Code while maintaining readability fortmatting and proper documentation.
+        Provide more efficient and elegant solution, if available, separately and after your explanation. Your response will be directly streamed to the webviewer of the VS Code.`
 };
-let anthropicClient;
+/**
+ * Class representing a progress indicator in the status bar.
+ */
 class StreamingProgress {
     statusBarItem;
     constructor(text = '$(loading~spin) Generating...') {
@@ -88,7 +98,13 @@ class StreamingProgress {
         this.statusBarItem.dispose();
     }
 }
+/**
+ * Validates the provided API key by making a test request.
+ * @param apiKey The API key to validate.
+ * @returns A promise that resolves to true if valid, false otherwise.
+ */
 async function validateApiKey(apiKey) {
+    const LLM_CONFIG = getLLMConfig();
     try {
         const client = new sdk_1.Anthropic({ apiKey });
         await client.messages.create({
@@ -102,12 +118,21 @@ async function validateApiKey(apiKey) {
         if (error instanceof sdk_1.AuthenticationError) {
             vscode.window.showErrorMessage('Authentication error: Please check your API key and try setting it again with the "Reasonance Copilot: Set Claude API Key" command.');
         }
-        else {
+        else if (error instanceof Error) {
             console.error('Error validating API key:', error);
+            vscode.window.showErrorMessage(`Error validating API key: ${error.message}`);
+        }
+        else {
+            console.error('Unknown error validating API key:', error);
+            vscode.window.showErrorMessage('An unknown error occurred while validating the API key.');
         }
         return false;
     }
 }
+/**
+ * Retrieves or initializes the Anthropic client with the current API key.
+ * @returns A promise that resolves to the Anthropic client or undefined if unavailable.
+ */
 async function getAnthropicClient() {
     const config = vscode.workspace.getConfiguration('reasonance-copilot');
     const apiKey = config.get('apiKey');
@@ -124,7 +149,14 @@ async function getAnthropicClient() {
     }
     return anthropicClient;
 }
+/**
+ * Retrieves the code context around the current cursor position for code completion.
+ * @param document The active text document.
+ * @param position The cursor position.
+ * @returns A string containing the code context.
+ */
 function getCompletionContext(document, position) {
+    const LLM_CONFIG = getLLMConfig();
     const startLine = Math.max(0, position.line - LLM_CONFIG.CONTEXT_LINES);
     const endLine = Math.min(document.lineCount - 1, position.line + LLM_CONFIG.CONTEXT_LINES);
     let contextLines = [];
@@ -138,7 +170,14 @@ function getCompletionContext(document, position) {
     }
     return contextLines.join('\n');
 }
+/**
+ * Determines if the completion should be triggered based on the trigger sequence.
+ * @param document The active text document.
+ * @param position The cursor position.
+ * @returns True if the completion should be triggered, false otherwise.
+ */
 function shouldTriggerCompletion(document, position) {
+    const LLM_CONFIG = getLLMConfig();
     const lineText = document.lineAt(position).text;
     if (position.character >= LLM_CONFIG.TRIGGER_SEQUENCE.length) {
         const lastChars = lineText.substring(position.character - LLM_CONFIG.TRIGGER_SEQUENCE.length, position.character);
@@ -146,32 +185,20 @@ function shouldTriggerCompletion(document, position) {
     }
     return false;
 }
-async function streamingMessage(client, messages, systemPrompt, onProgress, onComplete) {
-    try {
-        const stream = await client.messages.stream({
-            model: LLM_CONFIG.MODEL,
-            max_tokens: LLM_CONFIG.MAX_TOKENS,
-            temperature: LLM_CONFIG.DEFAULT_TEMPERATURE,
-            messages: messages,
-            system: systemPrompt,
-        });
-        for await (const chunk of stream) {
-            if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
-                onProgress(chunk.delta.text);
-            }
-        }
-        onComplete();
-    }
-    catch (error) {
-        console.error('Streaming error:', error);
-        throw error;
-    }
-}
 class EnhancedCompletionProvider {
     lastPosition;
     lastCompletion;
-    async provideInlineCompletionItems(document, position, context) {
+    cancellationTokenSource = null;
+    async provideInlineCompletionItems(document, position, context, token) {
+        const LLM_CONFIG = getLLMConfig();
         if (context.selectedCompletionInfo || !shouldTriggerCompletion(document, position)) {
+            return [];
+        }
+        // Cancel previous request
+        this.cancellationTokenSource?.cancel();
+        this.cancellationTokenSource = new vscode.CancellationTokenSource();
+        const cancellationToken = this.cancellationTokenSource.token;
+        if (cancellationToken.isCancellationRequested) {
             return [];
         }
         if (this.lastPosition &&
@@ -190,8 +217,7 @@ class EnhancedCompletionProvider {
                 return [];
             }
             const codeContext = getCompletionContext(document, position);
-            let progress;
-            progress = new StreamingProgress('$(loading~spin) Generating completion...');
+            const progress = new StreamingProgress('$(loading~spin) Generating completion...');
             progress.show();
             let completion = '';
             const stream = await client.messages.create({
@@ -209,6 +235,10 @@ class EnhancedCompletionProvider {
                 (async () => {
                     try {
                         for await (const event of stream) {
+                            if (token.isCancellationRequested || cancellationToken.isCancellationRequested) {
+                                progress.hide();
+                                return resolve([]);
+                            }
                             if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
                                 const newText = event.delta.text;
                                 completion += newText;
@@ -224,13 +254,14 @@ class EnhancedCompletionProvider {
                                 ]);
                             }
                         }
-                        progress?.hide();
                     }
                     catch (error) {
                         console.error('Error in streaming completion:', error);
-                        progress?.hide();
                         handleApiError(error, 'completion');
                         resolve([]);
+                    }
+                    finally {
+                        progress.hide();
                     }
                 })();
             });
@@ -242,26 +273,11 @@ class EnhancedCompletionProvider {
         }
     }
 }
-class ExplanationOutput {
-    panel;
-    content = '';
-    constructor() {
-        this.panel = vscode.window.createWebviewPanel('codeExplanation', 'Code Explanation', vscode.ViewColumn.Beside, {});
-        this.updateContent();
-    }
-    appendText(text) {
-        this.content += text;
-        this.updateContent();
-    }
-    updateContent() {
-        this.panel.webview.html = `
-            <html>
-                <body>
-                    <pre>${this.content}</pre>
-                </body>
-            </html>`;
-    }
-}
+/**
+ * Handles API errors and displays appropriate messages to the user.
+ * @param error The error object.
+ * @param operation The name of the operation during which the error occurred.
+ */
 function handleApiError(error, operation) {
     console.error(`Error during ${operation}:`, error);
     if (error instanceof sdk_1.AuthenticationError) {
@@ -270,18 +286,94 @@ function handleApiError(error, operation) {
     else if (error instanceof Error) {
         vscode.window.showErrorMessage(`${operation} error: ${error.message}`);
     }
+    else {
+        vscode.window.showErrorMessage(`${operation} error: Unknown error`);
+    }
 }
-function activate(context) {
-    let setApiKey = vscode.commands.registerCommand('reasonance-copilot.apiKey', async () => {
-        const apiKey = await vscode.window.showInputBox({
-            prompt: 'Enter your Claude API key (should start with "sk-")',
-            password: true,
-            validateInput: text => {
-                if (!text?.startsWith('sk-')) {
-                    return 'API key should start with "sk-"';
-                }
-                return null;
+/**
+ * Returns the base HTML template for the webview content.
+ * @param panel The webview panel.
+ * @param context The extension context.
+ * @returns The complete HTML string.
+ */
+function getWebviewContent(panel, context, theme) {
+    const mediaPath = vscode.Uri.joinPath(context.extensionUri, 'media');
+    const stylesPath = vscode.Uri.joinPath(mediaPath, 'styles');
+    // Available themes
+    const availableThemes = [
+        'default.min.css',
+        'github.min.css',
+        'github-dark.min.css',
+        'monokai-sublime.min.css',
+        'atom-one-dark.min.css',
+        'atom-one-light.min.css',
+        'googlecode.min.css'
+    ];
+    // Validate the theme
+    if (!availableThemes.includes(theme)) {
+        theme = 'github.min.css';
+    }
+    const markedUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(mediaPath, 'marked.min.js'));
+    const highlightUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(mediaPath, 'highlight.min.js'));
+    const highlightCssUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(stylesPath, theme));
+    const mainScriptUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(mediaPath, 'main.js'));
+    return `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <!-- Meta tags and styles -->
+        <meta charset="UTF-8">
+        <meta
+            http-equiv="Content-Security-Policy"
+            content="default-src 'none'; style-src ${panel.webview.cspSource} 'unsafe-inline'; script-src ${panel.webview.cspSource};"
+        >
+        <link href="${highlightCssUri}" rel="stylesheet">
+        <!-- Inline styles -->
+        <style>
+            body {
+                padding: 16px;
+                line-height: 1.5;
+                background-color: ${getBackgroundColor(theme)};
+                color: ${getTextColor(theme)};
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+                font-size: 16px;
             }
+            .processing {
+                font-style: italic;
+                color: #888;
+            }
+        </style>
+    </head>
+    <body>
+        <!-- Content -->
+        <div id="content" class="processing">Processing... Please wait.</div>
+
+        <!-- Scripts -->
+        <script src="${markedUri}"></script>
+        <script src="${highlightUri}"></script>
+        <script src="${mainScriptUri}"></script>
+    </body>
+    </html>
+    `;
+}
+function getBackgroundColor(theme) {
+    const darkThemes = ['github-dark.min.css', 'monokai-sublime.min.css', 'atom-one-dark.min.css'];
+    return darkThemes.includes(theme) ? '#1e1e1e' : '#ffffff';
+}
+function getTextColor(theme) {
+    const darkThemes = ['github-dark.min.css', 'monokai-sublime.min.css', 'atom-one-dark.min.css'];
+    return darkThemes.includes(theme) ? '#d4d4d4' : '#24292e';
+}
+/**
+ * The main activation function of the extension.
+ * @param context The extension context.
+ */
+function activate(context) {
+    const setApiKey = vscode.commands.registerCommand('reasonance-copilot.apiKey', async () => {
+        const apiKey = await vscode.window.showInputBox({
+            prompt: 'Enter your Claude API key',
+            password: true,
+            // Validation removed as per your request
         });
         if (apiKey) {
             const progress = new StreamingProgress();
@@ -301,15 +393,9 @@ function activate(context) {
             }
         }
     });
-    const inlineSuggestionProvider = vscode.languages.registerInlineCompletionItemProvider([
-        { scheme: 'file', language: 'python' },
-        { scheme: 'file', language: 'javascript' },
-        { scheme: 'file', language: 'typescript' },
-        { scheme: 'file', language: 'html' },
-        { scheme: 'file', language: 'css' },
-        { scheme: 'file', language: 'json' }
-    ], new EnhancedCompletionProvider());
-    let generateFunction = vscode.commands.registerCommand('reasonance-copilot.generateFunction', async () => {
+    const inlineSuggestionProvider = vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, // Applies to all files
+    new EnhancedCompletionProvider());
+    const generateFunction = vscode.commands.registerCommand('reasonance-copilot.generateFunction', async () => {
         const client = await getAnthropicClient();
         if (!client) {
             return;
@@ -318,10 +404,9 @@ function activate(context) {
         if (!editor) {
             return;
         }
+        const LLM_CONFIG = getLLMConfig();
         const selection = editor.selection;
-        const startPosition = selection.start;
-        const text = editor.document.getText(selection);
-        let progress;
+        const selectionText = editor.document.getText(selection);
         try {
             const description = await vscode.window.showInputBox({
                 prompt: 'Describe the function you want to generate'
@@ -329,100 +414,50 @@ function activate(context) {
             if (!description) {
                 return;
             }
-            progress = new StreamingProgress('$(loading~spin) Generating function...');
+            const progress = new StreamingProgress('$(loading~spin) Generating function...');
             progress.show();
             let generatedCode = '';
             const stream = await client.messages.create({
                 model: LLM_CONFIG.MODEL,
                 stream: true,
                 max_tokens: LLM_CONFIG.FUNCTION_TOKENS,
+                temperature: LLM_CONFIG.DEFAULT_TEMPERATURE,
                 messages: [{
                         role: 'user',
-                        content: `Strictly follow the system prompt and write a function that ${description}\nContext:\n${text}`
-                    }]
+                        content: `Strictly follow the system prompt and implement the following: ${description}.\nContext:\n${selectionText}`
+                    }],
+                system: SYSTEM_PROMPTS.FUNCTION
             });
             for await (const event of stream) {
                 if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
                     const newText = event.delta.text;
                     generatedCode += newText;
-                    try {
-                        // Calculate end position based on total length of generated code
-                        const lines = generatedCode.split('\n');
-                        const lastLineLength = lines[lines.length - 1].length;
-                        const endPosition = new vscode.Position(startPosition.line + lines.length - 1, lines.length === 1 ? startPosition.character + lastLineLength : lastLineLength);
-                        // Create range from start to current end position
-                        const range = new vscode.Range(startPosition, endPosition);
-                        await editor.edit(editBuilder => {
-                            editBuilder.replace(range, generatedCode);
-                        });
-                    }
-                    catch (error) {
-                        console.error('Error updating editor:', error);
-                    }
+                    // Update the editor content
+                    await editor.edit(editBuilder => {
+                        editBuilder.replace(selection, generatedCode);
+                    }, {
+                        undoStopBefore: false,
+                        undoStopAfter: false
+                    });
                 }
             }
-            progress?.hide();
+            // Finalize the edit with undo stop
+            await editor.edit(editBuilder => {
+                editBuilder.replace(selection, generatedCode);
+            }, {
+                undoStopBefore: true,
+                undoStopAfter: true
+            });
+            progress.hide();
         }
         catch (error) {
-            progress?.hide();
             handleApiError(error, 'function generation');
         }
     });
-    // Helper function to escape HTML special characters
-    function escapeHtml(unsafe) {
-        return unsafe
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;")
-            .replace(/'/g, "&#039;");
-    }
-    // Base HTML template with styles
-    const getWebviewContent = (content) => `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" 
-          content="default-src 'none'; 
-                   style-src 'unsafe-inline';">
-    <style>
-        body {
-            padding: 16px;
-            line-height: 1.5;
-            background-color: #dbdbdb;
-            color: #030303;
-            font-family: Roboto, "Helvetica Neue",Arial,"Noto Sans", ui-serif,Georgia,Cambria,"Times New Roman",Times,serif;
-            font-size: var(--vscode-editor-font-size);
-        }
-        .code-block {
-            background-color: #2D2D2D;  /* Slightly lighter than body for code blocks */
-            border: 1px solid #404040;  /* Subtle border */
-            padding: 12px;
-            margin: 8px 0;
-            white-space: pre;
-            overflow-x: auto;
-            color: #D4D4D4;  /* Slightly muted white for code */
-            border-radius: 4px;
-            font-family: Arial;
-        }
-        code {
-            background-color: black;
-            color: white;
-            padding: 2px 4px;
-            border-radius: 3px;
-            font-family: var(--vscode-editor-font-family);
-        }
-    </style>
-</head>
-<body>
-    ${content}
-</body>
-</html>
-`;
-    // Register command for explaining code with streaming support
-    let explainCode = vscode.commands.registerCommand('reasonance-copilot.explainCode', async () => {
+    const explainCodeCommand = vscode.commands.registerCommand('reasonance-copilot.explainCode', async () => {
+        await explainCode(context);
+    });
+    async function explainCode(context) {
         const client = await getAnthropicClient();
         if (!client) {
             return;
@@ -431,18 +466,19 @@ function activate(context) {
         if (!editor) {
             return;
         }
+        const LLM_CONFIG = getLLMConfig();
+        const theme = LLM_CONFIG.THEME; // Get the theme from config
         const selection = editor.selection;
         const text = editor.document.getText(selection);
         try {
             const progress = new StreamingProgress('$(loading~spin) Analyzing code...');
             progress.show();
             const panel = vscode.window.createWebviewPanel('reasonanceCopilotExplanation', 'Reasonance Copilot Explanation', vscode.ViewColumn.Beside, {
-                enableScripts: false // Disable script execution for security
+                enableScripts: true,
+                localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')]
             });
-            let explanation = '';
-            let currentCodeBlock = '';
-            let isInCodeBlock = false;
-            let buffer = '';
+            panel.webview.html = getWebviewContent(panel, context, theme);
+            let markdownContent = '';
             const stream = await client.messages.stream({
                 model: LLM_CONFIG.MODEL,
                 max_tokens: LLM_CONFIG.MAX_TOKENS,
@@ -454,108 +490,31 @@ function activate(context) {
                     }],
                 system: SYSTEM_PROMPTS.EXPLANATION
             });
-            const processBuffer = () => {
-                if (isInCodeBlock) {
-                    currentCodeBlock += buffer;
-                }
-                else {
-                    // Process any inline code blocks in the buffer
-                    const processedText = buffer.replace(/`([^`]+)`/g, (_, code) => `<code>${escapeHtml(code)}</code>`);
-                    explanation += processedText;
-                }
-                buffer = '';
-            };
+            let lastUpdateTime = Date.now();
+            const updateInterval = 500; // in milliseconds
             for await (const event of stream) {
                 if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
                     const chunk = event.delta.text;
-                    // Process the chunk character by character
-                    for (let i = 0; i < chunk.length; i++) {
-                        const char = chunk[i];
-                        // Detect code block markers
-                        if (char === '`' && chunk.slice(i, i + 3) === '```') {
-                            processBuffer();
-                            if (!isInCodeBlock) {
-                                // Starting a code block
-                                isInCodeBlock = true;
-                                i += 2; // Skip the next two backticks
-                                // Skip the language identifier if present
-                                while (i + 1 < chunk.length && chunk[i + 1] !== '\n') {
-                                    i++;
-                                }
-                            }
-                            else {
-                                // Ending a code block
-                                isInCodeBlock = false;
-                                i += 2; // Skip the next two backticks
-                                explanation += `<div class="code-block">${escapeHtml(currentCodeBlock)}</div>`;
-                                currentCodeBlock = '';
-                            }
-                        }
-                        else {
-                            buffer += char;
-                        }
+                    markdownContent += chunk;
+                    const currentTime = Date.now();
+                    if (currentTime - lastUpdateTime > updateInterval) {
+                        panel.webview.postMessage({ command: 'update', text: markdownContent });
+                        lastUpdateTime = currentTime;
                     }
-                    // Process any complete buffer content
-                    processBuffer();
-                    // Update the webview with the current content
-                    panel.webview.html = getWebviewContent(explanation);
                 }
             }
-            // Process any remaining buffer content
-            processBuffer();
-            // Final update to the webview
-            panel.webview.html = getWebviewContent(explanation);
+            // Send the final content
+            panel.webview.postMessage({ command: 'update', text: markdownContent });
             progress.hide();
         }
         catch (error) {
             handleApiError(error, 'code explanation');
         }
-    });
-    // let explainCode = vscode.commands.registerCommand('reasonance-copilot.explainCode', async () => {
-    //     const client = await getAnthropicClient();
-    //     if (!client) {return;}
-    //     const editor = vscode.window.activeTextEditor;
-    //     if (!editor) {return;}
-    //     const selection = editor.selection;
-    //     const text = editor.document.getText(selection);
-    //     try {
-    //         const progress = new StreamingProgress('$(loading~spin) Analyzing code...');
-    //         progress.show();
-    //         const panel = vscode.window.createWebviewPanel(
-    //             'codeExplanation',
-    //             'Code Explanation',
-    //             vscode.ViewColumn.Beside,
-    //             {}
-    //         );
-    //         let explanation = '';
-    //         const stream = await client.messages.stream({
-    //             model: LLM_CONFIG.MODEL,
-    //             max_tokens: LLM_CONFIG.MAX_TOKENS,
-    //             temperature: LLM_CONFIG.DEFAULT_TEMPERATURE,
-    //             stream: true,
-    //             messages: [{
-    //                 role: 'user',
-    //                 content: `Process this info by strictly following the system prompt:\n${text}`
-    //             }],
-    //             system: SYSTEM_PROMPTS.EXPLANATION
-    //         });
-    //         for await (const event of stream) {
-    //             if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-    //                 explanation += event.delta.text;
-    //                 panel.webview.html = `
-    //                     <html>
-    //                         <body>
-    //                             <pre>${explanation}</pre>
-    //                         </body>
-    //                     </html>`;
-    //             }
-    //         }
-    //         progress.hide();
-    //     } catch (error) {
-    //         handleApiError(error, 'code explanation');
-    //     }
-    // });
-    context.subscriptions.push(setApiKey, inlineSuggestionProvider, generateFunction, explainCode);
+    }
+    context.subscriptions.push(setApiKey, inlineSuggestionProvider, generateFunction, explainCodeCommand);
 }
+/**
+ * Deactivates the extension.
+ */
 function deactivate() { }
 //# sourceMappingURL=extension.js.map

@@ -2,9 +2,10 @@
   "name": "reasonance-copilot",
   "displayName": "Reasonance Copilot",
   "description": "AI-powered code completion and generation using Claude API",
-  "version": "0.0.1",
+  "icon": "icon.png",
+  "version": "0.1.0",
   "engines": {
-    "vscode": "1.95.1"
+    "vscode": "^1.75.0"
   },
   "categories": [
     "Programming Languages",
@@ -12,10 +13,12 @@
     "Snippets"
   ],
   "activationEvents": [
-    "onCommand",
     "onLanguage:python",
     "onLanguage:javascript",
-    "onLanguage:typescript"
+    "onLanguage:typescript",
+    "onLanguage:html",
+    "onLanguage:css",
+    "onLanguage:json"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -40,6 +43,64 @@
           "type": "string",
           "default": "",
           "description": "API Key for Claude (Anthropic)"
+        },
+        "reasonance-copilot.model": {
+          "type": "string",
+          "default": "claude-3-5-sonnet-20241022",
+          "description": "Model name for completions"
+        },
+        "reasonance-copilot.maxTokens": {
+          "type": "number",
+          "default": 8192,
+          "description": "Maximum tokens for completions"
+        },
+        "reasonance-copilot.completionTokens": {
+          "type": "number",
+          "default": 8192,
+          "description": "Maximum tokens for inline completions"
+        },
+        "reasonance-copilot.functionTokens": {
+          "type": "number",
+          "default": 8192,
+          "description": "Maximum tokens for function generation"
+        },
+        "reasonance-copilot.defaultTemperature": {
+          "type": "number",
+          "default": 0.3,
+          "description": "Default temperature for the model"
+        },
+        "reasonance-copilot.triggerSequence": {
+          "type": "string",
+          "default": "...;",
+          "description": "Trigger sequence for code completion"
+        },
+        "reasonance-copilot.contextLines": {
+          "type": "number",
+          "default": 10,
+          "description": "Number of context lines around the cursor"
+        },
+        "reasonance-copilot.theme": {
+          "type": "string",
+          "default": "github.min.css",
+          "description": "The CSS theme file to use for code explanations.",
+          "enum": [
+            "default.min.css",
+            "github.min.css",
+            "github-dark.min.css",
+            "monokai-sublime.min.css",
+            "atom-one-dark.min.css",
+            "atom-one-light.min.css",
+            "googlecode.min.css"
+          ],
+          "enumDescriptions": [
+            "Default theme",
+            "GitHub light theme",
+            "GitHub dark theme",
+            "Monokai Sublime theme",
+            "Atom One Dark theme",
+            "Atom One Light theme",
+            "Google Code theme"
+          ]
         }
       }
     }
@@ -49,22 +110,22 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
-    "lint": "eslint src",
-    "test": "vscode-test"
+    "lint": "eslint src --ext .ts",
+    "test": "npm run compile && npm run lint && npm run test:unit",
+    "test:unit": "mocha --recursive ./out/test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.31.0"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.8",
-    "@types/node": "20.x",
-    "@types/vscode": "1.95.1",
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.75.0",
     "@typescript-eslint/eslint-plugin": "^8.7.0",
     "@typescript-eslint/parser": "^8.7.0",
-    "@vscode/test-cli": "^0.0.10",
     "@vscode/test-electron": "^2.4.1",
     "eslint": "^9.11.1",
-    "typescript": "^5.6.2",
-    "vscode": "1.95.1"
+    "mocha": "^10.2.0",
+    "typescript": "^5.6.2"
   }
 }
