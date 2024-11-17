@@ -9,7 +9,7 @@ let anthropicClient: Anthropic | undefined;
 function getLLMConfig() {
     const config = vscode.workspace.getConfiguration('reasonance-copilot');
     return {
-        MODEL: config.get<string>('model', 'claude-2'),
+        MODEL: config.get<string>('model', 'claude-3-5-sonnet-20241022'),
         MAX_TOKENS: config.get<number>('maxTokens', 8192),
         COMPLETION_TOKENS: config.get<number>('completionTokens', 8192),
         FUNCTION_TOKENS: config.get<number>('functionTokens', 8192),
@@ -421,30 +421,35 @@ export function activate(context: vscode.ExtensionContext) {
         { pattern: '**' }, // Applies to all files
         new EnhancedCompletionProvider()
     );
-
+    
     const generateFunction = vscode.commands.registerCommand('reasonance-copilot.generateFunction', async () => {
         const client = await getAnthropicClient();
         if (!client) { return; }
-
+    
         const editor = vscode.window.activeTextEditor;
         if (!editor) { return; }
-
+    
         const LLM_CONFIG = getLLMConfig();
-
+    
         const selection = editor.selection;
         const selectionText = editor.document.getText(selection);
-
+    
         try {
             const description = await vscode.window.showInputBox({
                 prompt: 'Describe the function you want to generate'
             });
-
+    
             if (!description) { return; }
-
+    
             const progress = new StreamingProgress('$(loading~spin) Generating function...');
             progress.show();
-
-            let generatedCode = '';
+    
+            const document = editor.document;
+            let insertionOffset = document.offsetAt(selection.end);
+            let buffer = '';
+            const updateDelay = 100; // ms
+            let lastUpdate = Date.now();
+    
             const stream = await client.messages.create({
                 model: LLM_CONFIG.MODEL,
                 stream: true,
@@ -456,36 +461,62 @@ export function activate(context: vscode.ExtensionContext) {
                 }],
                 system: SYSTEM_PROMPTS.FUNCTION
             });
-
+    
             for await (const event of stream) {
                 if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
                     const newText = event.delta.text;
-                    generatedCode += newText;
-
-                    // Update the editor content
-                    await editor.edit(editBuilder => {
-                        editBuilder.replace(selection, generatedCode);
-                    }, {
-                        undoStopBefore: false,
-                        undoStopAfter: false
-                    });
+                    buffer += newText;
+    
+                    if (Date.now() - lastUpdate > updateDelay) {
+                        const position = editor.document.positionAt(insertionOffset);
+    
+                        await editor.edit(editBuilder => {
+                            editBuilder.insert(position, buffer);
+                        }, {
+                            undoStopBefore: false,
+                            undoStopAfter: false
+                        });
+    
+                        // Update the insertion offset
+                        insertionOffset += buffer.length;
+    
+                        // Clear the buffer and update the timestamp
+                        buffer = '';
+                        lastUpdate = Date.now();
+                    }
                 }
             }
-
-            // Finalize the edit with undo stop
+    
+            // Insert any remaining text in the buffer
+            if (buffer.length > 0) {
+                const position = editor.document.positionAt(insertionOffset);
+    
+                await editor.edit(editBuilder => {
+                    editBuilder.insert(position, buffer);
+                }, {
+                    undoStopBefore: false,
+                    undoStopAfter: false
+                });
+    
+                // Update the insertion offset
+                insertionOffset += buffer.length;
+            }
+    
+            // Finalize the edit with undo stops
             await editor.edit(editBuilder => {
-                editBuilder.replace(selection, generatedCode);
+                // No additional edits; this is to set the undo stop
             }, {
                 undoStopBefore: true,
                 undoStopAfter: true
             });
-
+    
             progress.hide();
-
+    
         } catch (error) {
             handleApiError(error, 'function generation');
         }
     });
+    
 
     const explainCodeCommand = vscode.commands.registerCommand('reasonance-copilot.explainCode', async () => {
         await explainCode(context);
